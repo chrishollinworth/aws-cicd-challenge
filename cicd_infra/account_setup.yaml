@@ -1,0 +1,46 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Parameters:
+  S3BucketNamePrefix:
+    Description: S3 Bucket Name
+    Type: String
+  S3BucketKey:
+    Description: S3 Bucket Key
+    Type: String
+
+Resources:
+  CodeArtifactsBucketName:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /S3/CodeArtifactsBucketName
+      Type: String
+      Value: !Ref CodeArtifactsBucket
+      Description: SSM Parameter for code artifact bucket name.
+
+  CodeArtifactsBucketKey:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /S3/CodeArtifactsBucketKey
+      Type: String
+      Value: !Ref S3BucketKey
+      Description: SSM Parameter for code artifact key.
+
+  CodeArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${S3BucketNamePrefix}-${AWS::AccountId}-${AWS::Region}"
+      AccessControl: "BucketOwnerFullControl"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: "AES256"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+Outputs:
+  CodeArtifactsBucketName:
+    Value: !Ref CodeArtifactsBucket
+    Description: Code Artifacts Bucket Name

@@ -1,0 +1,1 @@
+aws cloudformation create-stack --stack-name test-template --template-body file://test_template.yaml --parameters ParameterKey=ExternalSourceIP,ParameterValue=0.0.0.0 ParameterKey=Environment,ParameterValue=Development ParameterKey=S3BucketName,ParameterValue=cicd2023 --region us-west-2 --capabilities CAPABILITY_IAM

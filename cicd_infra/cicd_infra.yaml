@@ -1,0 +1,463 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Resources:
+  CodeRepository:
+    Type: AWS::CodeCommit::Repository
+    DeletionPolicy: Delete
+    Properties:
+      RepositoryName: cicdrepository
+      RepositoryDescription: repository containing enviromental build code
+
+  BranchHelperFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSCodeCommitFullAccess
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  CustomResourceLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      CompatibleRuntimes:
+        - python3.6
+        - python3.7
+        - python3.8
+        - python3.9
+      Content: ./src/lambda_layer
+      Description: Custom Resource Lambda Layer
+      LayerName: CustomResourceLayer
+
+  BranchHelperFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code: ./src/codecommit_branch_helper
+      FunctionName: "BranchHelperFunction"
+      Handler: codecommit_branch_helper.handler
+      Runtime: python3.9
+      Role: !GetAtt BranchHelperFunctionRole.Arn
+      Timeout: 500
+      MemorySize: 1024
+      Layers:
+        - !Ref CustomResourceLayer
+
+  BranchHelperCustomResource:
+    Type: Custom::BranchHelper
+    Properties:
+      ServiceToken: !GetAtt BranchHelperFunction.Arn
+      RepositoryName: !GetAtt CodeRepository.Name
+      BranchesToCreate: "development,staging,production"
+      CodeArtifactsBucketName: "{{resolve:ssm:/S3/CodeArtifactsBucketName:1}}"
+      CodeArtifactsBucketKey: "{{resolve:ssm:/S3/CodeArtifactsBucketKey:1}}"
+
+  CodeCommitPullPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Policy to have capability to pull code from the CodeCommit repo.
+      Path: /myapp/policy/
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - codecommit:GitPull
+            Resource: !GetAtt CodeRepository.Arn
+
+  StaticCodeAnalysisServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+      Policies:
+        - PolicyName: StaticCodeAnalysisPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                  - logs:*
+                  - s3:*
+                Resource: "*"
+      Path: /
+      RoleName: !Join
+        - "-"
+        - - !Ref "AWS::StackName"
+          - StaticCodeAnalysisRole
+
+  StaticCodeAnalysisProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Description: Static Code Analysis Build Project
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:4.0
+        Type: LINUX_CONTAINER
+      ServiceRole: !Ref "StaticCodeAnalysisServiceRole"
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              commands:
+                - pip install --upgrade pip
+                - env && ls -l && python --version
+                - pip install cfn-lint
+                - aws --version
+                - cfn-lint test_template.yaml
+
+  SecurityCodeAnalysisServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+      Policies:
+        - PolicyName: SecurityCodeAnalysisPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                  - logs:*
+                  - s3:*
+                Resource: "*"
+      Path: /
+      RoleName: !Join
+        - "-"
+        - - !Ref "AWS::StackName"
+          - SecurityCodeAnalysisRole
+
+  SecurityCodeAnalysisProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Description: Static Code Analysis Build Project
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:4.0
+        Type: LINUX_CONTAINER
+      ServiceRole: !Ref "SecurityCodeAnalysisServiceRole"
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                ruby: 3.1
+              commands:
+                - gem install cfn-nag
+                - cfn_nag_rules
+                - cfn_nag test_template.yaml
+
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+      Policies:
+        - PolicyName: CodePipelineBasePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                  - s3:*
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                  - logs:*
+                  - ec2:*
+                  - ssm:*
+                  - lambda:*
+                  - cloudformation:*
+                  - codecommit:*
+                Resource: "*"
+      Path: /
+      RoleName: !Join
+        - "-"
+        - - !Ref "AWS::StackName"
+          - CodePipelineRole
+
+  CloudFormationServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service:
+                - cloudformation.amazonaws.com
+      Policies:
+        - PolicyName: CodePipelineBasePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudformation:*
+                  - s3:*
+                  - logs:*
+                  - ec2:*
+                  - ssm:*
+                  - elasticloadbalancing:*
+                  - iam:*
+                Resource: "*"
+      Path: /
+      RoleName: !Join
+        - "-"
+        - - !Ref "AWS::StackName"
+          - CloudFormationRole
+
+  DevelopmentPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    DependsOn: BranchHelperCustomResource
+    Properties:
+      ArtifactStores:
+        - Region: !Ref "AWS::Region"
+          ArtifactStore:
+            Type: S3
+            Location: "{{resolve:ssm:/S3/CodeArtifactsBucketName:1}}"
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: "1"
+                Provider: CodeCommit
+              OutputArtifacts:
+                - Name: Source
+              Configuration:
+                BranchName: development
+                RepositoryName: !GetAtt CodeRepository.Name
+        - Name: StaticCodeAnalysis
+          Actions:
+            - Name: BuildAction
+              InputArtifacts:
+                - Name: Source
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: "1"
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref StaticCodeAnalysisProject
+              RunOrder: 2
+        - Name: SecurityCodeAnalysis
+          Actions:
+            - Name: BuildAction
+              InputArtifacts:
+                - Name: Source
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: "1"
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref SecurityCodeAnalysisProject
+              RunOrder: 3
+        - Name: Provision
+          Actions:
+            - Name: !Ref "AWS::Region"
+              InputArtifacts:
+                - Name: Source
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: "1"
+                Provider: CloudFormation
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                ParameterOverrides: '{"Environment": "Development","ExternalSourceIP": "0.0.0.0","S3BucketName": "cicd2023dev"}'
+                RoleArn: !GetAtt CloudFormationServiceRole.Arn
+                Capabilities: CAPABILITY_IAM,CAPABILITY_AUTO_EXPAND
+                StackName: DevStack
+                TemplatePath: Source::test_template.yaml
+              RunOrder: 4
+              Region: !Ref "AWS::Region"
+
+  StagingPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    DependsOn: BranchHelperCustomResource
+    Properties:
+      ArtifactStores:
+        - Region: !Ref "AWS::Region"
+          ArtifactStore:
+            Type: S3
+            Location: "{{resolve:ssm:/S3/CodeArtifactsBucketName:1}}"
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: "1"
+                Provider: CodeCommit
+              OutputArtifacts:
+                - Name: Source
+              Configuration:
+                BranchName: staging
+                RepositoryName: !GetAtt CodeRepository.Name
+        - Name: StaticCodeAnalysis
+          Actions:
+            - Name: BuildAction
+              InputArtifacts:
+                - Name: Source
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: "1"
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref StaticCodeAnalysisProject
+              RunOrder: 2
+        - Name: SecurityCodeAnalysis
+          Actions:
+            - Name: BuildAction
+              InputArtifacts:
+                - Name: Source
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: "1"
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref SecurityCodeAnalysisProject
+              RunOrder: 3
+        - Name: Provision
+          Actions:
+            - Name: !Ref "AWS::Region"
+              InputArtifacts:
+                - Name: Source
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: "1"
+                Provider: CloudFormation
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                ParameterOverrides: '{"Environment": "Staging","ExternalSourceIP": "0.0.0.0","S3BucketName": "cicd2023staging"}'
+                RoleArn: !GetAtt CloudFormationServiceRole.Arn
+                Capabilities: CAPABILITY_IAM,CAPABILITY_AUTO_EXPAND
+                StackName: StagingStack
+                TemplatePath: Source::test_template.yaml
+              RunOrder: 4
+              Region: !Ref "AWS::Region"
+
+  ProductionPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    DependsOn: BranchHelperCustomResource
+    Properties:
+      ArtifactStores:
+        - Region: !Ref "AWS::Region"
+          ArtifactStore:
+            Type: S3
+            Location: "{{resolve:ssm:/S3/CodeArtifactsBucketName:1}}"
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: "1"
+                Provider: CodeCommit
+              OutputArtifacts:
+                - Name: Source
+              Configuration:
+                BranchName: production
+                RepositoryName: !GetAtt CodeRepository.Name
+        - Name: StaticCodeAnalysis
+          Actions:
+            - Name: BuildAction
+              InputArtifacts:
+                - Name: Source
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: "1"
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref StaticCodeAnalysisProject
+              RunOrder: 2
+        - Name: SecurityCodeAnalysis
+          Actions:
+            - Name: BuildAction
+              InputArtifacts:
+                - Name: Source
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: "1"
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref SecurityCodeAnalysisProject
+              RunOrder: 3
+        - Name: Provision
+          Actions:
+            - Name: !Ref "AWS::Region"
+              InputArtifacts:
+                - Name: Source
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: "1"
+                Provider: CloudFormation
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                ParameterOverrides: '{"Environment": "Production","ExternalSourceIP": "0.0.0.0","S3BucketName": "cicd2023prod"}'
+                RoleArn: !GetAtt CloudFormationServiceRole.Arn
+                Capabilities: CAPABILITY_IAM,CAPABILITY_AUTO_EXPAND
+                StackName: ProdStack
+                TemplatePath: Source::test_template.yaml
+              RunOrder: 4
+              Region: !Ref "AWS::Region"
