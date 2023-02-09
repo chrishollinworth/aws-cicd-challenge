@@ -314,7 +314,7 @@ Resources:
                 Provider: CloudFormation
               Configuration:
                 ActionMode: CREATE_UPDATE
-                ParameterOverrides: '{"Environment": "Development","ExternalSourceIP": "0.0.0.0","S3BucketName": "cicd2023dev"}'
+                ParameterOverrides: '{"Environment": "Development","ExternalSourceCIDR": "0.0.0.0/0","S3BucketName": "cicd2023dev"}'
                 RoleArn: !GetAtt CloudFormationServiceRole.Arn
                 Capabilities: CAPABILITY_IAM,CAPABILITY_AUTO_EXPAND
                 StackName: DevStack
@@ -384,7 +384,7 @@ Resources:
                 Provider: CloudFormation
               Configuration:
                 ActionMode: CREATE_UPDATE
-                ParameterOverrides: '{"Environment": "Staging","ExternalSourceIP": "0.0.0.0","S3BucketName": "cicd2023staging"}'
+                ParameterOverrides: '{"Environment": "Staging","ExternalSourceCIDR": "0.0.0.0/0","S3BucketName": "cicd2023staging"}'
                 RoleArn: !GetAtt CloudFormationServiceRole.Arn
                 Capabilities: CAPABILITY_IAM,CAPABILITY_AUTO_EXPAND
                 StackName: StagingStack
@@ -454,7 +454,7 @@ Resources:
                 Provider: CloudFormation
               Configuration:
                 ActionMode: CREATE_UPDATE
-                ParameterOverrides: '{"Environment": "Production","ExternalSourceIP": "0.0.0.0","S3BucketName": "cicd2023prod"}'
+                ParameterOverrides: '{"Environment": "Production","ExternalSourceCIDR": "0.0.0.0/0","S3BucketName": "cicd2023prod"}'
                 RoleArn: !GetAtt CloudFormationServiceRole.Arn
                 Capabilities: CAPABILITY_IAM,CAPABILITY_AUTO_EXPAND
                 StackName: ProdStack
